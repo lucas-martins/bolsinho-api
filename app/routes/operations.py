@@ -8,12 +8,11 @@ from dotenv import load_dotenv
 from ..database import SessionLocal
 from .. import models, schemas
 
-# Configurações
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 
-security = HTTPBearer()  # extrai o token do header Authorization
+security = HTTPBearer()
 
 def get_db():
     db = SessionLocal()
@@ -33,37 +32,26 @@ def get_current_user(
         exp: int | None = payload.get("exp")
         if username is None or exp is None:
             raise HTTPException(status_code=401, detail="Token inválido")
-
-        # expiração manual (opcional, caso queira garantir)
         if datetime.now(timezone.utc).timestamp() > exp:
             raise HTTPException(status_code=401, detail="Token expirado")
-
     except jwt.PyJWTError:
         raise HTTPException(
             status_code=401,
             detail="Não autenticado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     user = db.query(models.User).filter(models.User.username == username).first()
     if user is None:
         raise HTTPException(status_code=401, detail="Usuário não encontrado")
+    return user
 
-    return user  # pode retornar para vincular a operação ao user, se desejar
-
-
-# ──────────────────────────────
-# Router protegido
-# ──────────────────────────────
 router = APIRouter(
     prefix="/operations",
     tags=["operations"],
-    # ➜ Todas as rotas abaixo exigirão Bearer JWT
-    dependencies=[Depends(get_current_user)],
+    # remove dependencies global para usar por endpoint
 )
 
 # CREATE
-# ──────────────────────────────
 @router.post(
     "",
     response_model=schemas.OperationOut,
@@ -72,16 +60,15 @@ router = APIRouter(
 def create_operation(
     op_in: schemas.OperationCreate,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),  # usuário logado
 ):
-    op = models.Operation(**op_in.dict())
+    op = models.Operation(**op_in.dict(), user_id=current_user.id)  # associa usuário
     db.add(op)
     db.commit()
     db.refresh(op)
     return op
 
-
-# READ
-# ──────────────────────────────
+# READ (lista só do usuário)
 @router.get(
     "",
     response_model=list[schemas.OperationOut],
@@ -90,12 +77,17 @@ def list_operations(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
-    return db.query(models.Operation).offset(skip).limit(limit).all()
+    return (
+        db.query(models.Operation)
+        .filter(models.Operation.user_id == current_user.id)  # filtra só as operações do usuário
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
-
-# UPDATE
-# ──────────────────────────────
+# UPDATE (só se for do usuário)
 @router.put(
     "/{operation_id}",
     response_model=schemas.OperationOut,
@@ -104,9 +96,10 @@ def update_operation(
     operation_id: int,
     op_in: schemas.OperationUpdate,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     op = db.query(models.Operation).get(operation_id)
-    if not op:
+    if not op or op.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Operação não encontrada")
 
     for field, value in op_in.dict(exclude_unset=True).items():
@@ -116,9 +109,7 @@ def update_operation(
     db.refresh(op)
     return op
 
-
-# DELETE
-# ──────────────────────────────
+# DELETE (só se for do usuário)
 @router.delete(
     "/{operation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -126,9 +117,10 @@ def update_operation(
 def delete_operation(
     operation_id: int,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     op = db.query(models.Operation).get(operation_id)
-    if not op:
+    if not op or op.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Operação não encontrada")
 
     db.delete(op)
