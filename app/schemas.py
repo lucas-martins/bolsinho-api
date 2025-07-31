@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, validator
-from datetime import date
-from typing import Optional
+from datetime import date, datetime
+from typing import Optional, List
 
 
 # Usuário
@@ -56,8 +56,15 @@ class OperationUpdate(BaseModel):
 
 class OperationOut(OperationBase):
     id: int
-    date: date            # data informada
+    date: datetime            # data informada
     user_id: int              # dono da operação
+
+    class Config:
+        orm_mode = True
+
+class OperationListResponse(BaseModel):
+    balance: float
+    operations: List[OperationOut]
 
     class Config:
         orm_mode = True

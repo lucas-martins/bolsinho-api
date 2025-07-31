@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import jwt, os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 from ..database import SessionLocal
@@ -48,7 +49,6 @@ def get_current_user(
 router = APIRouter(
     prefix="/operations",
     tags=["operations"],
-    # remove dependencies global para usar por endpoint
 )
 
 # CREATE
@@ -71,21 +71,44 @@ def create_operation(
 # READ (lista só do usuário)
 @router.get(
     "",
-    response_model=list[schemas.OperationOut],
+    response_model=schemas.OperationListResponse
 )
 def list_operations(
     skip: int = 0,
     limit: int = 100,
+    month_year: str = Query(None, alias="month_year"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return (
-        db.query(models.Operation)
-        .filter(models.Operation.user_id == current_user.id)  # filtra só as operações do usuário
+    query = db.query(models.Operation).filter(models.Operation.user_id == current_user.id)
+
+    if month_year:
+        try:
+            start_date = datetime.strptime(month_year, "%m/%Y")
+            if start_date.month == 12:
+                next_month = start_date.replace(year=start_date.year + 1, month=1)
+            else:
+                next_month = start_date.replace(month=start_date.month + 1)
+            end_date = next_month - timedelta(seconds=1)
+
+            query = query.filter(models.Operation.date >= start_date, models.Operation.date <= end_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de data inválido. Use mm/aaaa.")
+
+    operations = (
+        query.order_by(models.Operation.date.asc())
         .offset(skip)
         .limit(limit)
         .all()
     )
+
+    balance = sum(op.value for op in operations if op.type == "E") - \
+            sum(op.value for op in operations if op.type == "S")
+
+    return {
+        "balance": float(balance),
+        "operations": operations
+    }
 
 # UPDATE (só se for do usuário)
 @router.put(
